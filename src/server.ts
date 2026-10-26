@@ -7,6 +7,7 @@ import { RedisAuthStore } from './redis-store.js';
 import { PostgresLeaderboards } from './leaderboard.js';
 import { packs } from '../vendor/robbo/src/generated/packs';
 import { digest, REPLAY_ENGINE } from '../vendor/robbo/src/application/replay';
+import { PostgresCheckpointStore } from './checkpoint-store.js';
 
 const databaseUrl = required('DATABASE_URL');
 const redisUrl = required('REDIS_URL');
@@ -19,7 +20,7 @@ const limits = new RedisAuthStore(redis);
 const auth = createAuth(limits, new PostgresAccounts(pool), { clientId: process.env.GITHUB_CLIENT_ID ?? '', clientSecret: process.env.GITHUB_CLIENT_SECRET ?? '', publicUrl, frontendUrl, secure: new URL(publicUrl).protocol === 'https:' });
 const origins = [...new Set([new URL(publicUrl).origin, new URL(frontendUrl).origin, ...(process.env.ALLOWED_ORIGINS ?? '').split(',').filter(Boolean)])];
 const boards = packs.flatMap(pack => pack.levels.map(level => ({ campaign: pack.id, planet: level.number, engine: REPLAY_ENGINE, campaignHash: digest(pack) })));
-const app = buildApp(new PostgresProgressStore(pool), origins, undefined, { auth, limits, leaderboards: new PostgresLeaderboards(pool, redis), boards });
+const app = buildApp(new PostgresProgressStore(pool), origins, undefined, { auth, limits, leaderboards: new PostgresLeaderboards(pool, redis), boards, checkpoints: new PostgresCheckpointStore(pool) });
 app.addHook('onClose', async () => { await redis.close(); await pool.end(); });
 await app.listen({ port: Number(process.env.PORT ?? 3000), host: process.env.HOST ?? '127.0.0.1' });
 function required(name: string): string { const value = process.env[name]; if (!value) throw new Error(`${name} must be set`); return value; }

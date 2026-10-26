@@ -5,6 +5,8 @@ import type { ProgressRecord, ProgressStore } from './types.js';
 import type { Auth } from './auth.js';
 import type { Leaderboards, Board } from './leaderboard.js';
 import type { AuthStore } from './auth.js';
+import type { CheckpointStore } from './checkpoint-store.js';
+import { checkpointRoutes } from './checkpoint-routes.js';
 
 const token = { type: 'string', minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9._-]+$' };
 const record = {
@@ -12,10 +14,10 @@ const record = {
   properties: { schemaVersion: { type: 'integer', minimum: 1 }, gameVersion: { type: 'string', minLength: 1, maxLength: 128 }, deviceId: { type: 'string', minLength: 1, maxLength: 128 }, payload: { type: 'object', maxProperties: 128, additionalProperties: true } }
 } as const;
 
-export function buildApp(store: ProgressStore, allowedOrigins: string[] = [], resolveUser: (request: FastifyRequest) => Promise<string | undefined> = async () => undefined, services?: { auth: Auth; leaderboards: Leaderboards; limits: AuthStore; boards: Board[] }) {
+export function buildApp(store: ProgressStore, allowedOrigins: string[] = [], resolveUser: (request: FastifyRequest) => Promise<string | undefined> = async () => undefined, services?: { auth: Auth; leaderboards: Leaderboards; limits: AuthStore; boards: Board[]; checkpoints?: CheckpointStore }) {
   const app = Fastify({ logger: { redact: ['req.headers.authorization', 'req.headers.cookie', 'res.headers["set-cookie"]'], serializers: { req: (request) => ({ method: request.method, url: request.url?.split('?')[0] }) } }, bodyLimit: 256 * 1024 });
   app.register(cookie);
-  app.register(cors, { origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)), credentials: true });
+  app.register(cors, { origin: (origin, callback) => callback(null, !origin || allowedOrigins.includes(origin)), credentials: true, exposedHeaders: ['ETag'] });
   if (services) {
     resolveUser = async request => (await services.auth.identity(request))?.id;
     services.auth.register(app);
@@ -25,6 +27,7 @@ export function buildApp(store: ProgressStore, allowedOrigins: string[] = [], re
     app.addHook('onSend', async (request, reply) => { if (!request.url.startsWith('/v1/leaderboards')) reply.header('cache-control', 'no-store'); });
   }
   app.get('/healthz', async () => ({ status: 'ok' }));
+  if (services?.checkpoints) checkpointRoutes(app,services.checkpoints,resolveUser,id => services.limits.allow(`checkpoint:${id}`,30,60));
   app.get('/v1/me', async request => { const user = services ? await services.auth.identity(request) : undefined; return { user: user ?? null, mode: user ? 'account' : 'guest' }; });
   app.post('/v1/auth/logout', async (request, reply) => { await services?.auth.logout(request); reply.clearCookie('robbo_session', { path: '/' }); return reply.code(204).send(); });
   app.get('/v1/progress', { schema: { querystring: { type: 'object', additionalProperties: false, properties: { since: { type: 'string', format: 'date-time' } } } } }, async (request, reply) => {

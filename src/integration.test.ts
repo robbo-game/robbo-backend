@@ -7,6 +7,10 @@ import { createClient } from 'redis';
 import { PostgresAccounts } from './auth.js';
 import { PostgresLeaderboards, runVerificationJob, type Board } from './leaderboard.js';
 import { RedisAuthStore } from './redis-store.js';
+import { PostgresCheckpointStore } from './checkpoint-store.js';
+import { GameSession } from '../vendor/robbo/src/application/game-session';
+import { saveAttempt, restoreAttempt } from '../vendor/robbo/src/application/saved-attempt';
+import { packs } from '../vendor/robbo/src/generated/packs';
 const enabled = Boolean(process.env.TEST_DATABASE_URL && process.env.TEST_REDIS_URL);
 test('PostgreSQL queue publishes verified personal bests; Redis orders cached time/death results', { skip: !enabled }, async () => {
   const schema = `test_${randomUUID().replaceAll('-', '')}`;
@@ -18,7 +22,7 @@ test('PostgreSQL queue publishes verified personal bests; Redis orders cached ti
   const board: Board = { campaign: randomUUID(), planet: 1, engine: 'test', campaignHash: '12345678' };
   const redisKeys: string[] = [];
   try {
-    for (const migration of ['001_initial.sql', '002_auth_leaderboards.sql']) await pool.query(await readFile(new URL(`../sql/${migration}`, import.meta.url), 'utf8'));
+    for (const migration of ['001_initial.sql', '002_auth_leaderboards.sql', '003_checkpoints.sql']) await pool.query(await readFile(new URL(`../sql/${migration}`, import.meta.url), 'utf8'));
     const accounts = new PostgresAccounts(pool);
     const a = await accounts.github('1', 'first'), b = await accounts.github('2', 'second');
     assert.equal((await accounts.github('1', 'renamed')).id, a.id);
@@ -46,6 +50,24 @@ test('PostgreSQL queue publishes verified personal bests; Redis orders cached ti
     // PostgreSQL result updates independently; cache expires within 15 seconds.
     await submit(a.id, 99, 5);
     const updated = await pool.query('SELECT elapsed_ticks,deaths FROM leaderboard_result WHERE user_id=$1', [a.id]); assert.equal(updated.rows[0].elapsed_ticks, 99); assert.equal(updated.rows[0].deaths, 5);
+    // Independent store objects model a phone and a desktop connected to the same database.
+    const phone = new PostgresCheckpointStore(pool), desktop = new PostgresCheckpointStore(pool);
+    const session = new GameSession(packs[0],123); session.start(); session.step(); session.togglePause();
+    const draft = { campaign: packs[0].id,slot: 'current',deviceId: 'phone',attempt: saveAttempt(session,1000) };
+    assert.equal((await phone.save(a.id,draft,0,'phone-first-request-001')).status,'saved');
+    assert.equal((await desktop.save(a.id,draft,99,'wrong-version-request002')).status,'conflict');
+    const cloud = await desktop.get(a.id,draft.campaign,'current'); assert.ok(cloud);
+    const resumed = restoreAttempt(cloud.attempt,packs); assert.equal(resumed.paused,true); assert.equal(resumed.randomState,session.randomState);
+    assert.equal(await desktop.get(b.id,draft.campaign,'current'),undefined);
+    const contenders = await Promise.all([
+      phone.save(a.id,{ ...draft,deviceId: 'phone' },1,'phone-concurrent-request03'),
+      desktop.save(a.id,{ ...draft,deviceId: 'desktop' },1,'desktop-concurrent-request4')
+    ]); assert.equal(contenders.filter(r => r.status==='saved').length,1); assert.equal(contenders.filter(r => r.status==='conflict').length,1);
+    assert.equal((await phone.save(a.id,draft,0,'phone-first-request-001')).status,'saved');
+    assert.equal((await phone.save(a.id,{ ...draft,deviceId: 'different' },0,'phone-first-request-001')).status,'key_reused');
+    const missing = await phone.save(a.id,{ ...draft,slot: 'missing' },7,'missing-revision-request5'); assert.equal(missing.status,'conflict');
+    for (let revision=2; revision<8; revision++) assert.equal((await phone.save(a.id,draft,revision,`history-request-${revision}-unique`)).status,'saved');
+    const history = await pool.query('SELECT revision FROM checkpoint_history WHERE user_id=$1 ORDER BY revision', [a.id]); assert.deepEqual(history.rows.map(r=>r.revision),[4,5,6,7,8]);
   } finally {
     if (redisKeys.length) await redis.del(redisKeys);
     await redis.close(); await pool.end();
