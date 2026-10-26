@@ -10,7 +10,9 @@ Backend for the optional cloud layer of Robbo. The browser game remains fully pl
 - PostgreSQL schema for canonical progress and idempotency responses; Redis is connected at startup so deployment fails fast if its session/rate-limit/leaderboard dependency is unavailable.
 - Empty, deliberately non-authoritative leaderboard read endpoint. Replay upload and submission remain disabled until the server-side deterministic replay verifier lands.
 
-The temporary guest identity exists only to exercise the contract. It must be replaced with the authenticated account identity before progress syncing is enabled in the game client. GitHub OAuth and magic links require deployment-specific secrets and redirect URLs; no OAuth secrets belong in this repository.
+Cloud progress endpoints return 401 until a server-side authenticated user resolver is implemented. Contract tests inject an isolated test identity; the running server never uses a shared guest account. GitHub OAuth and magic links require deployment-specific secrets and redirect URLs; no OAuth secrets belong in this repository. This is an initial foundation, not a production-ready authentication or synchronization service.
+
+The credentials in `.env.example` and `compose.yaml` are public development placeholders for local containers only. Database ports bind to loopback. Keep real credentials in an ignored `.env` file or a deployment secret manager. Never reuse the development password in production.
 
 ## Run locally
 
