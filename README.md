@@ -123,6 +123,37 @@ or improve a leaderboard entry. Ranking still requires a verified replay.
 - `GET /v1/leaderboards` lists supported boards; `GET /v1/leaderboards/{campaign}/{planet}?engine=...&campaignHash=...&limit=25&offset=0` returns public verified entries.
 - A separate worker reproduces the pinned game engine in a thread with memory/time limits. Each player has one best result per campaign/planet/engine/hash: shorter simulated time wins, fewer deaths break time ties, stable user ID resolves exact ties. Tick duration is 100 ms; pauses/death sequences count, restarts do not reset totals. Only deaths within the submitted recording count, not lifetime attempts. The first win fixes the score; trailing frames are still validated.
 
+## HTTP API endpoints
+
+These are the application endpoints exposed by the API. Public endpoints do not
+require a session; private endpoints require the `robbo_session` cookie obtained
+through GitHub login. `/v1/me` and logout also work for guests. All `POST` and
+`PUT` requests require an `Origin` header matching a configured allowed origin,
+including requests made outside a browser. JSON bodies require `Content-Type:
+application/json`. Path parameters are shown in braces.
+
+| Method | Path | Access | Parameters | Purpose |
+| --- | --- | --- | --- | --- |
+| GET | `/healthz` | Public | None | Returns `{"status":"ok"}` to indicate the API is running. |
+| GET | `/auth/github` | Public | None | Starts GitHub OAuth and redirects the browser to GitHub. Requires configured OAuth credentials. |
+| GET | `/auth/github/callback` | Public | Query: `state` and `code` on success; GitHub may return `error`. Requires the OAuth state cookie set at login. | Completes GitHub login, creates a session and redirects to the frontend. |
+| GET | `/v1/me` | Public | Optional session cookie. | Returns the signed-in user and `account` mode, or a null user and `guest` mode. |
+| POST | `/v1/auth/logout` | Public | Allowed `Origin`; optional session cookie. | Deletes the current server-side session and clears its cookie. |
+| GET | `/v1/progress` | Session | Optional query `since`: ISO 8601 date-time. | Lists the user's progress records updated after `since`, with a cursor. |
+| PUT | `/v1/progress/{campaign}/{slot}` | Session | Path: `campaign`, `slot`. Headers: `If-Match` (unquoted revision), `Idempotency-Key` (16–128 characters), allowed `Origin`. JSON: `schemaVersion` (integer ≥ 1), `gameVersion`, `deviceId`, `payload` (object). | Creates or updates progress with revision checking and retry deduplication. Use revision `0` for a new record. |
+| GET | `/v1/checkpoints/{campaign}/{slot}` | Session | Path: `campaign`, `slot`. | Retrieves the user's saved checkpoint and revision, or returns 404 with revision 0 when absent. |
+| PUT | `/v1/checkpoints/{campaign}/{slot}` | Session | Path: `campaign`, `slot`. Headers: `If-Match` (quoted or unquoted revision), `Idempotency-Key` (16–128 characters), allowed `Origin`. JSON: `deviceId`, `attempt` (SavedAttempt object). | Validates and saves a checkpoint with revision checking and retry deduplication. Use revision `0` for a new slot. |
+| GET | `/v1/leaderboards` | Public | None. | Lists supported boards and their ranking order. |
+| GET | `/v1/leaderboards/{campaign}/{planet}` | Public | Path: `campaign`, `planet` (1–9999). Required query: `engine`, `campaignHash` (8 lowercase hexadecimal characters). Optional query: `limit` (1–100, default 25), `offset` (0–10000, default 0). | Returns a page of verified results for a supported board. |
+| POST | `/v1/leaderboard/submissions` | Session | Allowed `Origin`; JSON: `replay` (object). | Queues a replay for verification and returns its submission information with HTTP 202. |
+| GET | `/v1/leaderboard/submissions/{id}` | Session | Path: `id` (submission UUID). | Returns the status of a submission owned by the signed-in user. |
+
+`campaign`, `slot`, and `engine` are 1–64 character identifiers containing
+letters, digits, `.`, `_`, or `-`. Browser clients must include credentials for
+session requests. The OAuth endpoints are unavailable until GitHub credentials
+are configured; the endpoint list does not imply that the service is publicly
+deployed.
+
 Cloud writes require a valid Robbo session and an allowed Origin; frontend fetches use `credentials: 'include'`. Public entries include rank, userId, displayName (GitHub login), elapsedMs and deaths. Explain that the login/result become public before offering submission. GitHub tokens are used only during login, never stored or returned. Cookies are host-only/HttpOnly, Secure/SameSite=None over HTTPS (Lax locally); request logs omit query strings and credentials. Register a GitHub OAuth App and set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `PUBLIC_URL` and `FRONTEND_URL` in the environment. Callback: `{PUBLIC_URL}/auth/github/callback`. Missing OAuth configuration returns 503. Magic links are not implemented.
 
 The frontend login/ranking screens and automatic submissions are not yet connected in the game repository. Deploying this repository alone does not enable the UI. Cross-site cookies between GitHub Pages and an unrelated API domain may be blocked; use game/API domains under one site or a same-origin reverse proxy. Only a valid simulation is proven, not human play or wall-clock speed.
