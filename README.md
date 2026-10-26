@@ -4,65 +4,65 @@ Optional GitHub login, cross-device game checkpoints, progress storage and verif
 
 See [the complete OAuth and leaderboard flow](docs/github-login-leaderboard-flow.md) for setup, API usage, ranking rules and rollout steps.
 
-## Funkcjonalność uzgodniona w projekcie
+## Project functionality
 
-Backend jest niezależną usługą dla [gry Robbo](https://robbo-game.github.io/robbo/).
-Założenia pochodzą z [dyskusji #34](https://github.com/robbo-game/robbo/discussions/34);
-pełny flow logowania i rankingu opisuje [issue #1](https://github.com/robbo-game/robbo-backend/issues/1).
+The backend is an independent service for [Robbo](https://robbo-game.github.io/robbo/).
+The requirements originate in [discussion #34](https://github.com/robbo-game/robbo/discussions/34);
+[issue #1](https://github.com/robbo-game/robbo-backend/issues/1) describes the complete login and leaderboard flow.
 
-| Funkcja | Obecne zachowanie backendu |
+| Feature | Current backend behavior |
 | --- | --- |
-| Gra bez konta | Lokalna rozgrywka nie wymaga API; konto jest opcjonalne |
-| Logowanie GitHub | OAuth authorization code + PKCE, własny userId Robbo i sesja Redis |
-| Synchronizacja postępu | Prywatne rekordy kampanii/slotu w PostgreSQL, rewizje i wykrywanie konfliktów |
-| Przeniesienie rozgrywki telefon → komputer | Pełny checkpoint SavedAttempt, prywatny zapis/odczyt przez oba urządzenia zalogowane na to samo konto |
-| Ranking | Osobno dla kampanii, planety, silnika i hashu kampanii; krótszy czas, potem mniej śmierci |
-| Potwierdzanie wyników | Serwer odtwarza replay; wynik podany przez klienta nie jest uznawany za wiarygodny |
-| Dostarczanie rankingu | Publiczne REST API z paginacją, prywatny status zgłoszenia, Redis sorted sets jako cache |
-| Trwałość danych | PostgreSQL jest źródłem prawdy; utrata cache Redisa nie usuwa postępu ani wyników |
-| Prywatność | Checkpointy i postęp widzi tylko właściciel; publiczny ranking zawiera pseudonim i wynik |
+| Guest play | Local gameplay does not require the API; accounts are optional |
+| GitHub login | OAuth authorization code + PKCE, a separate Robbo userId and a Redis session |
+| Progress synchronization | Private campaign/slot records in PostgreSQL, revisions and conflict detection |
+| Moving a game from phone to desktop | A full SavedAttempt checkpoint, privately saved and loaded by devices signed into the same account |
+| Ranking | Separate boards for each campaign, planet, engine and campaign hash; shorter time, then fewer deaths |
+| Result verification | The server replays the recording; client-supplied scores are not trusted |
+| Leaderboard delivery | A paginated public REST API, private submission status and Redis sorted-set caching |
+| Data durability | PostgreSQL is authoritative; losing the Redis cache does not delete progress or results |
+| Privacy | Only the owner can access checkpoints and progress; public entries contain a display name and result |
 
-Kod backendu obsługuje powyższe operacje. Uruchomienie funkcji w samej grze wymaga
-wdrożenia usługi, konfiguracji GitHub OAuth App oraz podłączenia klienta gry do API.
-To repozytorium nie wdraża automatycznie serwera ani przycisków synchronizacji
-na GitHub Pages. Magic link, eksport/usuwanie konta i pełna obsługa konfliktów
-w interfejsie gracza pozostają kolejnymi etapami.
+The backend implements these operations. Enabling them in the game requires
+deploying the service, configuring a GitHub OAuth App and connecting the game client to the API.
+This repository does not automatically deploy the server or add synchronization controls
+to GitHub Pages. Magic links, account export/deletion and full conflict resolution
+in the player interface remain future work.
 
-## Pauza na telefonie i wznowienie na komputerze
+## Pause on a phone and resume on a desktop
 
-Checkpoint jest czymś innym niż postęp kampanii i replay rankingu. Zawiera format
-`SavedAttempt` używany przez grę: wersję silnika i hash kampanii, planetę, seed,
-bieżący stan RNG oraz kompletny snapshot świata. Zachowuje pozycje i stany obiektów,
-Robbo, klucze, amunicję, zebrane/pozostałe śruby, licznik klatek, pociski, eksplozje,
-lasery, teleportację i stan prezentacji śmierci. Odczyt przez `restoreAttempt`
-przywraca grę w pauzie, aby przeciwnicy nie ruszyli przed naciśnięciem „Wznów”.
-Układ ekranu, sterowanie dotykowe, dźwięki już odtworzone i oczekujące naciśnięcia
-klawiszy nie są przenoszone — komputer korzysta ze swojego interfejsu.
+A checkpoint is distinct from campaign progress and a leaderboard replay. It uses
+the game's `SavedAttempt` format: engine version, campaign hash, planet, seed,
+current RNG state and a complete world snapshot. It preserves object positions and states,
+Robbo, keys, ammunition, collected/remaining screws, tick count, projectiles, explosions,
+lasers, teleportation and death presentation state. Loading through `restoreAttempt`
+restores the game paused so enemies cannot move before the player chooses Resume.
+Screen layout, touch controls, already-played sounds and pending key presses
+are not transferred; the desktop uses its own interface.
 
-Flow integracji klienta:
+Client integration flow:
 
-1. Na obu urządzeniach gracz loguje się tym samym kontem GitHub.
-2. Klient pobiera `GET /v1/checkpoints/{campaign}/current`. Odpowiedź zawiera
-   `revision` i `ETag`; brak zapisu daje 404 z revision 0. Na nowym urządzeniu nie
-   należy nadpisywać chmury przed sprawdzeniem istniejącego checkpointu.
-3. Po pauzie telefon najpierw zapisuje lokalnie, a następnie wysyła
-   `PUT /v1/checkpoints/{campaign}/current` z `deviceId`, `attempt`, `If-Match`
-   i unikalnym `Idempotency-Key`. Checkpoint jest sprawdzany w izolowanym workerze
-   przez odtworzenie stanu przypiętym silnikiem. Nieobsługiwana wersja lub uszkodzone
-   referencje obiektów dają 422.
-4. Dopiero odpowiedź 200 potwierdza zapis w chmurze. Komputer pobiera checkpoint,
-   wywołuje `restoreAttempt(record.attempt, packs)` i pokazuje „Wznów”.
-5. Wznowienie wywołuje `session.togglePause()` i kontynuuje identyczną symulację
-   z zachowanym stanem losowości. Następne zapisy używają pobranej rewizji.
-6. Gdy drugi klient zdąży zapisać nowszy stan, PUT zwraca 412 z aktualnym rekordem.
-   Klient zachowuje własny zapis lokalny i daje wybór: pobierz chmurę albo świadomie
-   nadpisz po ponownym pobraniu rewizji. Nie ponawia automatycznie z nową rewizją.
+1. The player signs into the same GitHub account on both devices.
+2. The client requests `GET /v1/checkpoints/{campaign}/current`. The response includes
+   `revision` and `ETag`; a missing save returns 404 with revision 0. A new device must
+   check for an existing checkpoint before overwriting the cloud save.
+3. After pausing, the phone saves locally first, then sends
+   `PUT /v1/checkpoints/{campaign}/current` with `deviceId`, `attempt`, `If-Match`
+   and a unique `Idempotency-Key`. An isolated worker validates the checkpoint
+   by restoring it with the pinned engine. Unsupported versions or corrupt
+   object references return 422.
+4. Only a 200 response confirms the cloud save. The desktop downloads the checkpoint,
+   calls `restoreAttempt(record.attempt, packs)` and displays Resume.
+5. Resuming calls `session.togglePause()` and continues the same simulation
+   with the preserved RNG state. Subsequent saves use the downloaded revision.
+6. If another client has saved a newer state, PUT returns 412 with the current record.
+   The client keeps its local save and offers a choice: load the cloud save or explicitly
+   overwrite it after fetching the latest revision. It must not automatically retry with a new revision.
 
-Przykład kodu klienta (korzysta z funkcji `saveAttempt`/`restoreAttempt` silnika gry):
+Client example (using the game engine's `saveAttempt`/`restoreAttempt` functions):
 
 ```js
-// api: skonfigurowany adres API; session: aktualna sesja gry.
-// revision: rewizja pobrana wcześniej z chmury (0 tylko dla nieistniejącego slotu).
+// api: configured API URL; session: current game session.
+// revision: previously fetched cloud revision (0 only for a missing slot).
 if (!session.paused) session.togglePause();
 const attempt = saveAttempt(session);
 const requestId = crypto.randomUUID();
@@ -75,41 +75,42 @@ const response = await fetch(`${api}/v1/checkpoints/${session.pack.id}/current`,
   },
   body: JSON.stringify({ deviceId: 'phone-device-id', attempt })
 });
-// Przy błędzie sieci ponów dokładnie to samo żądanie i requestId.
-// Przy 412 pokaż konflikt; przy 401 zaloguj ponownie.
+// On a network failure, retry the exact same request and requestId.
+// On 412, display the conflict; on 401, sign in again.
 if (!response.ok) throw new Error(`Checkpoint save: ${response.status}`);
 const saved = await response.json();
 revision = saved.revision;
 
-// Na drugim urządzeniu, po zalogowaniu:
+// On the second device, after signing in:
 const downloaded = await fetch(`${api}/v1/checkpoints/${campaign}/current`, {
   credentials: 'include', cache: 'no-store'
 });
 if (!downloaded.ok) throw new Error(`Checkpoint load: ${downloaded.status}`);
 const record = await downloaded.json();
-const restored = restoreAttempt(record.attempt, packs); // w pauzie
-// Dopiero po kliknięciu „Wznów”: restored.togglePause();
+const restored = restoreAttempt(record.attempt, packs); // paused
+// Only after the player chooses Resume: restored.togglePause();
 ```
 
-`GET` i `PUT` wymagają własnej sesji użytkownika. Żądania przeglądarkowe PUT
-wymagają dozwolonego Origin, odpowiedzi są prywatne z Cache-Control: no-store,
-a ETag jest udostępniony przez CORS. `deviceId` służy do rozpoznania źródła zapisu,
-nie do autoryzacji. Nie podaje się userId w treści żądania.
+Both `GET` and `PUT` require the owner's user session. Browser PUT requests
+require an allowed Origin, responses are private with Cache-Control: no-store,
+and ETag is exposed through CORS. `deviceId` identifies the source device;
+it does not authorize access. The request body does not accept a userId.
 
-Zapisy są transakcyjne w PostgreSQL (`game_checkpoint`, `checkpoint_history`,
-`checkpoint_request`): aktualny rekord, pięć ostatnich wersji na slot oraz historia
-idempotencji (do 50 ostatnich żądań użytkownika, maksymalnie 7 dni). Ta sama treść
-z tym samym kluczem nie zwiększa rewizji; inna treść z użytym kluczem daje 409.
-Nieistniejący slot można utworzyć tylko z If-Match 0. Dwa równoczesne zapisy tej
-samej rewizji nie mogą oba wygrać. Limit: 1 MiB na zapis, 30 zapisów/minutę/konto,
-20 slotów na konto. Redis nie jest kopią checkpointów: nie zwróci przestarzałego
-stanu po zmianie urządzenia. Dostęp wymaga jednak aktywnej sesji przechowywanej w Redisie.
+Writes are transactional in PostgreSQL (`game_checkpoint`, `checkpoint_history`,
+`checkpoint_request`): the current record, the five most recent versions per slot and
+idempotency history (up to the user's 50 most recent requests, retained for at most seven days).
+The same content with the same key does not increment the revision; different content
+with a reused key returns 409. A missing slot can only be created with If-Match 0.
+Two concurrent writes against the same revision cannot both succeed. Limits: 1 MiB per save,
+30 saves/minute/account and 20 slots/account. Redis does not cache checkpoints,
+so switching devices does not return a stale cached state. Access still requires
+an active session stored in Redis.
 
-Pauza offline pozostaje lokalna. Zamknięcie aplikacji w telefonie nie gwarantuje
-ukończenia żądania sieciowego; klient powinien pokazywać „zapisano w chmurze” dopiero
-po potwierdzeniu, zachować lokalny journal i ponowić wysyłkę po powrocie połączenia.
-Checkpoint jest zapisem do kontynuacji, nie dowodem wyniku: nie tworzy ani nie
-podnosi pozycji w leaderboardzie. Ranking nadal wymaga zweryfikowanego replaya.
+Pausing offline only saves locally. Closing the phone app does not guarantee that
+a network request completes; the client should display Saved to cloud only after
+confirmation, keep its local journal and retry when connectivity returns.
+A checkpoint is for resuming gameplay, not proving a result: it does not create
+or improve a leaderboard entry. Ranking still requires a verified replay.
 
 ## What is implemented
 
