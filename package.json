@@ -1,0 +1,28 @@
+{
+  "name": "robbo-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first synchronization and verified leaderboard API for Robbo",
+  "type": "module",
+  "engines": { "node": ">=24.0.0 <25" },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/**/*.test.js",
+    "migrate": "tsx src/migrate.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/cookie": "^11.0.2",
+    "fastify": "^5.4.0",
+    "pg": "^8.16.3",
+    "redis": "^5.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
