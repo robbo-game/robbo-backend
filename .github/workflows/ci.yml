@@ -1,0 +1,31 @@
+name: Backend CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: robbo
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: robbo_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U robbo -d robbo_test" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://robbo:local-ci-only@127.0.0.1:5432/robbo_test
+          TEST_REDIS_URL: redis://127.0.0.1:6379
